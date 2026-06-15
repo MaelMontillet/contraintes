@@ -15,23 +15,23 @@ num_before_skip: 1
 num_after_skip: 2
 num_dense_output: 3
 
-num_train: 110000
-num_valid: 10000
+num_train: 2310
+#num_valid: 10000
 data_seed: 42
-dataset: "data/qm9_eV.npz"
+#dataset: "data/qm9_eV.npz"
 logdir: "."
 
-num_steps: 3000000
+num_steps: 80000
 ema_decay: 0.999
 
 learning_rate: 0.001
-warmup_steps: 3000
+warmup_steps: 800
 decay_rate: 0.01
-decay_steps: 4000000
+decay_steps: 120000
 
-batch_size: 32
-evaluation_interval: 10000
-save_interval: 10000
-restart: None
-comment: "final"
-targets: ['U0']  # ['mu', 'alpha', 'homo', 'lumo', 'gap', 'r2', 'zpve', 'U0', 'U', 'H', 'G', 'Cv']
+batch_size: 4
+evaluation_interval: 600
+save_interval: 600
+restart: "/home/n7student/Documents/2A/S2/contraintes/projet_kaggle/dimenet/20260611_092819_cOCLOzyo_U0_finetuning_half_frozen"
+comment: "U0_finetuning_half_frozen"
+#targets: ['U0']  # ['mu', 'alpha', 'homo', 'lumo', 'gap', 'r2', 'zpve', 'U0', 'U', 'H', 'G', 'Cv']

@@ -4,7 +4,7 @@ import scipy.sparse as sp
 index_keys = ["batch_seg", "idnb_i", "idnb_j", "id_expand_kj",
               "id_reduce_ji", "id3dnb_i", "id3dnb_j", "id3dnb_k"]
 
-
+ 
 class DataContainer:
     def __init__(self, filename, cutoff, target_keys):
         data_dict = np.load(filename, allow_pickle=True)

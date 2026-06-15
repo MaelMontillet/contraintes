@@ -1,0 +1,44 @@
+model_name: "dimenet"
+
+emb_size: 128
+num_blocks: 4
+
+num_bilinear: 8
+num_spherical: 7
+num_radial: 6
+output_init: 'GlorotOrthogonal'  # 'zeros' for Mu, HOMO, LUMO, and ZPVE; 'GlorotOrthogonal' for alpha, R2, U0, U, H, G, and Cv
+
+cutoff: 5.0
+envelope_exponent: 5
+
+num_before_skip: 1
+#num_after_skip: 2
+num_after_skip: 1
+#num_dense_output: 3
+num_dense_output: 2
+
+# total train size : 3306
+num_train: 2310
+#num_valid: 10000 # not used for our problem
+data_seed: 42
+#dataset: "data/qm9_eV.npz"
+logdir: "."
+
+#num_steps: 3000000
+num_steps: 30000 # 2310 * 200 / 16 = 28875 
+ema_decay: 0.999
+
+learning_rate: 0.001
+#warmup_steps: 3000
+warmup_steps: 50
+decay_rate: 0.01
+#decay_steps: 4000000
+decay_steps: 40000 # =30000*4/3 to respect the default proportions
+
+#batch_size: 32
+batch_size: 16
+evaluation_interval: 150 # 2310/16 ~= 144 = 1 epoch
+save_interval: 150
+restart: None
+comment: "v1.1" 
+targets: ['U0']  # Not used for our problem

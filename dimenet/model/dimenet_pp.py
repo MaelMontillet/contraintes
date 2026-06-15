@@ -7,6 +7,9 @@ from .layers.interaction_pp_block import InteractionPPBlock
 from .layers.output_pp_block import OutputPPBlock
 from .activations import swish
 
+import numpy as np
+
+
 
 class DimeNetPP(tf.keras.Model):
     """
@@ -56,6 +59,7 @@ class DimeNetPP(tf.keras.Model):
             activation=swish, extensive=True, output_init='zeros',
             name='dimenet', **kwargs):
         super().__init__(name=name, **kwargs)
+
         self.num_blocks = num_blocks
         self.extensive = extensive
 
@@ -127,6 +131,7 @@ class DimeNetPP(tf.keras.Model):
         for i in range(self.num_blocks):
             x = self.int_blocks[i]([x, rbf, sbf, id_expand_kj, id_reduce_ji])
             P += self.output_blocks[i+1]([x, rbf, idnb_i, n_atoms])
+
 
         if self.extensive:
             P = tf.math.segment_sum(P, batch_seg)
