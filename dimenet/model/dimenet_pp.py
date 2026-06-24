@@ -108,7 +108,6 @@ class DimeNetPP(tf.keras.Model):
         return angle
 
     def call(self, inputs, training=False):
-        print(training)
         Z, R                         = inputs['Z'], inputs['R']
         batch_seg                    = inputs['batch_seg']
         idnb_i, idnb_j               = inputs['idnb_i'], inputs['idnb_j']

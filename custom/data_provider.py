@@ -44,6 +44,17 @@ class DataProvider:
                         'test': np.arange(self._ndata)}
         # ==========================================
 
+        # Weighted sampling: probability ∝ |LR residual| so hard examples
+        # appear more frequently. Falls back to uniform if weights unavailable.
+        if train and hasattr(self.data_container, 'train_sample_weights'):
+            raw_w = self.data_container.train_sample_weights  # shape: (len(full_train_idx),)
+            if ntrain is not None and ntrain < len(full_train_idx):
+                raw_w = raw_w[:ntrain]
+            w = raw_w + raw_w.mean()  # add mean so no sample drops to near-zero weight
+            self._train_weights = w / w.sum()
+        else:
+            self._train_weights = None
+
         # Index for retrieving batches
         self.idx_in_epoch = {'train': 0, 'val': 0, 'test': 0}
 
@@ -75,11 +86,23 @@ class DataProvider:
         # ==========================================
 
     def shuffle_train(self):
-        """Shuffle the training data"""
+        """Shuffle the training data (used when weighted sampling is off)."""
         self.idx['train'] = self._random_state.permutation(self.idx['train'])
 
     def get_batch_idx(self, split):
-        """Return the indices for a batch of samples from the specified set"""
+        """Return indices for the next batch.
+
+        Training uses weighted sampling (with replacement) when weights are
+        available, so every batch is an independent draw and epochs are
+        virtual (nsamples['train'] steps = one pass through the data by count).
+        Validation/test use sequential iteration as before.
+        """
+        if split == 'train' and self._train_weights is not None:
+            # Weighted sampling with replacement: harder molecules appear more often
+            return self._random_state.choice(
+                self.idx['train'], size=self.batch_size, replace=True,
+                p=self._train_weights)
+
         start = self.idx_in_epoch[split]
 
         # Is epoch finished?
@@ -87,7 +110,7 @@ class DataProvider:
             start = 0
             self.idx_in_epoch[split] = 0
 
-        # shuffle training set at start of epoch
+        # shuffle training set at start of epoch (uniform mode only)
         if start == 0 and split == 'train':
             self.shuffle_train()
 

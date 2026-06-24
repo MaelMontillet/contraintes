@@ -1,6 +1,5 @@
 # ===========================================
 # Student code: adapt dataloading to the project dataset
-# Commentary / robustness with Claude
 
 import os
 import csv
@@ -9,19 +8,19 @@ from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 
 
 # Periodic-table mapping from element symbol to atomic number (Z).
-# Extend as needed for your dataset.
+# Only elements actually present in the dataset.
 ELEMENT_TO_Z = {
-    'H': 1,  'He': 2,   'C': 6,
-    'N': 7,  'O': 8,    'Na': 11, 
-    'S': 16, 'Cl':17
+    'H': 1,  'C': 6,
+    'N': 7,  'O': 8,
+    'S': 16, 'Cl': 17
 }
-ELEMENT_LIST = [1, 2, 6, 7, 8, 11, 16, 17]
+ELEMENT_LIST = [1, 6, 7, 8, 16, 17]
 
-Z_TO_COL = {element:i for i, element in enumerate(ELEMENT_LIST)}
+Z_TO_COL = {element: i for i, element in enumerate(ELEMENT_LIST)}
 
 
 # ---------------------------------------------------------------------------
-# Extended-XYZ parser 
+# Extended-XYZ parser
 # ---------------------------------------------------------------------------
 
 def parse_extxyz(filepath):
@@ -43,7 +42,6 @@ def parse_extxyz(filepath):
         lines = [l.rstrip('\n') for l in fh if l.strip()]  # drop blank lines
 
     n_atoms = int(lines[0].strip())
-    # lines[1] is the comment / Properties line -> skip it
     atom_lines = lines[2: 2 + n_atoms]
 
     if len(atom_lines) != n_atoms:
@@ -72,16 +70,16 @@ def parse_extxyz(filepath):
 
 
 def get_atom_count(Z, N):
-        n_sample = len(N)
-        n_disctinct_atoms = len(Z_TO_COL)
-        # Get an array of the count of atom in each molecules
-        atom_count = np.zeros((n_sample, n_disctinct_atoms))
-        start = 0
-        for i, n in enumerate(N):
-            for z in Z[start:start+n]:
-                atom_count[i, Z_TO_COL[z]] += 1
-            start += n
-        return atom_count
+    n_sample = len(N)
+    n_distinct_atoms = len(Z_TO_COL)
+    atom_count = np.zeros((n_sample, n_distinct_atoms))
+    start = 0
+    for i, n in enumerate(N):
+        for z in Z[start:start + n]:
+            atom_count[i, Z_TO_COL[z]] += 1
+        start += n
+    return atom_count
+
 
 # ==========================================================================================================
 # Code from DimeNet
@@ -92,72 +90,88 @@ import scipy.sparse as sp
 
 index_keys = ["batch_seg", "idnb_i", "idnb_j", "id_expand_kj",
               "id_reduce_ji", "id3dnb_i", "id3dnb_j", "id3dnb_k"]
- 
-class DataContainer:
-    # =============================================
-    # init modified to match our problem
-    def __init__(self, data_root, cutoff, train=True, scale_target=False, 
-                 seed=42, val_size=0.1):
 
-        # Random state parameter, such that random operations are reproducible if wanted
+
+class DataContainer:
+    def __init__(self, data_root, cutoff, train=True, scale_target=False,
+                 seed=42, val_size=0.1,
+                 fold_train_idx=None, fold_val_idx=None):
+        """
+        Parameters
+        ----------
+        fold_train_idx / fold_val_idx : array-like, optional
+            Pre-computed integer indices into the training dataset.
+            When provided, the internal splitting logic is bypassed so that
+            K-fold CV can inject its own splits while the scaler is still
+            fitted exclusively on each fold's training portion.
+        """
         self._random_state = np.random.RandomState(seed=seed)
 
         if scale_target or train:
             ids_train, N_train, Z_train, R_train = DataContainer.parse_dataset(data_root, 'train')
             energies_csv = os.path.join(data_root, 'energies/train.csv')
-            energy_by_id = {}  # mol_id (int) -> {col: float}
+            energy_by_id = {}
             with open(energies_csv, newline='') as energy_file:
                 reader = csv.DictReader(energy_file)
                 for row in reader:
                     mol_id = int(row['id'])
                     energy_by_id[mol_id] = row["energy"]
-            
                 train_targets = np.array([energy_by_id[id] for id in ids_train], dtype=np.float32)
 
         if scale_target:
             whole_train_atom_count = get_atom_count(Z_train, N_train)
             whole_train_presence = whole_train_atom_count > 0
 
-            # Split train / validation set using the presence of atoms
-            msss = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=val_size, random_state=self._random_state)
-            self.train_idx, self.val_idx = next(msss.split(np.zeros(len(N_train)), whole_train_presence))
+            if fold_train_idx is not None:
+                # K-fold CV: caller supplies the split
+                self.train_idx = np.asarray(fold_train_idx)
+                self.val_idx   = np.asarray(fold_val_idx)
+            else:
+                msss = MultilabelStratifiedShuffleSplit(
+                    n_splits=1, test_size=val_size, random_state=self._random_state)
+                self.train_idx, self.val_idx = next(
+                    msss.split(np.zeros(len(N_train)), whole_train_presence))
 
             train_only_atom_count = whole_train_atom_count[self.train_idx]
-            train_only_targets= train_targets[self.train_idx]
+            train_only_targets    = train_targets[self.train_idx]
             self.scaler = LREnergyScaler(True)
             self.scaler.fit(train_only_atom_count, train_only_targets)
+            # |LR residual| per sample — used by DataProvider for weighted sampling
+            raw_residuals = train_only_targets - self.scaler.lr.predict(train_only_atom_count)
+            self.train_sample_weights = np.abs(raw_residuals).astype(np.float32)
 
         else:
             if train:
-                from math import ceil
-                n_val = ceil(len(N_train) * val_size)
-                all_idx = np.arange(len(N_train))
-                all_idx = self._random_state.permutation(all_idx)
-                self.train_idx = all_idx[n_val:]
-                self.val_idx = all_idx[:n_val]
+                if fold_train_idx is not None:
+                    self.train_idx = np.asarray(fold_train_idx)
+                    self.val_idx   = np.asarray(fold_val_idx)
+                else:
+                    from math import ceil
+                    n_val = ceil(len(N_train) * val_size)
+                    all_idx = np.arange(len(N_train))
+                    all_idx = self._random_state.permutation(all_idx)
+                    self.train_idx = all_idx[n_val:]
+                    self.val_idx   = all_idx[:n_val]
 
         if train:
-            self.id = ids_train
-            self.Z = Z_train
-            self.N = N_train
-            self.R = R_train
+            self.id      = ids_train
+            self.Z       = Z_train
+            self.N       = N_train
+            self.R       = R_train
             self.targets = train_targets
         else:
             self.id, self.N, self.Z, self.R = DataContainer.parse_dataset(data_root, "test")
-            self.targets = np.array([0 for _ in self.id], dtype=np.float32)
-        
-        self.cutoff = cutoff
+            self.targets = np.zeros(len(self.id), dtype=np.float32)
+
+        self.cutoff   = cutoff
         self.N_cumsum = np.concatenate([[0], np.cumsum(self.N)])
         assert self.R is not None
 
-        # Scale the targets
         if scale_target:
             if train:
                 self.targets = self.scaler.transform(whole_train_atom_count, self.targets)
-            # We scale back in trainer when we do inference.
-            # For test, labels are fake so we don't care.
         else:
-            self.scaler = None 
+            self.scaler = None
 
     @staticmethod
     def parse_dataset(data_root, dataset_name):
@@ -168,8 +182,6 @@ class DataContainer:
             if not molecule_file.endswith('.xyz'):
                 continue
 
-            # splittext[0] get name without extension
-            # [3:] --> remove the "id_" art the start of the name
             mol_id = int(os.path.splitext(molecule_file)[0][3:])
             ids_list.append(mol_id)
 
@@ -177,12 +189,12 @@ class DataContainer:
             N_list.append(n)
             Z_list.append(Z)
             R_list.append(R)
-        ids = np.array(ids_list, dtype=np.int32)           
-        N = np.array(N_list,   dtype=np.int32)           
-        Z = np.concatenate(Z_list).astype(np.int32)      
-        R = np.concatenate(R_list).astype(np.float32)
-        return ids, N, Z, R
 
+        ids = np.array(ids_list, dtype=np.int32)
+        N   = np.array(N_list,   dtype=np.int32)
+        Z   = np.concatenate(Z_list).astype(np.int32)
+        R   = np.concatenate(R_list).astype(np.float32)
+        return ids, N, Z, R
 
     # ==============================================
     # Code from DimeNet
@@ -201,7 +213,6 @@ class DataContainer:
         return sp.csr_matrix((new_data, new_indices, new_indptr))
 
     def __len__(self):
-        #return self.targets.shape[0]
         return len(self.targets)
 
     def __getitem__(self, idx):
@@ -210,8 +221,8 @@ class DataContainer:
 
         data = {}
         data['targets'] = self.targets[idx]
-        data['id'] = self.id[idx]
-        data['N'] = self.N[idx]
+        data['id']      = self.id[idx]
+        data['N']       = self.N[idx]
         data['batch_seg'] = np.repeat(np.arange(len(idx), dtype=np.int32), data['N'])
         adj_matrices = []
 
@@ -220,9 +231,9 @@ class DataContainer:
 
         nend = 0
         for k, i in enumerate(idx):
-            n = data['N'][k]  # number of atoms
+            n = data['N'][k]
             nstart = nend
-            nend = nstart + n
+            nend   = nstart + n
 
             if self.Z is not None:
                 data['Z'][nstart:nend] = self.Z[self.N_cumsum[i]:self.N_cumsum[i + 1]]
@@ -233,34 +244,26 @@ class DataContainer:
             Dij = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
             adj_matrices.append(sp.csr_matrix(Dij <= self.cutoff))
             adj_matrices[-1] -= sp.eye(n, dtype=np.bool_)
-        
-        # Entry x,y is edge x<-y (!)
+
         adj_matrix = self._bmat_fast(adj_matrices)
-        # Entry x,y is edgeid x<-y (!)
         atomids_to_edgeid = sp.csr_matrix(
             (np.arange(adj_matrix.nnz), adj_matrix.indices, adj_matrix.indptr),
             shape=adj_matrix.shape)
         edgeid_to_target, edgeid_to_source = adj_matrix.nonzero()
 
-        # Target (i) and source (j) nodes of edges
         data['idnb_i'] = edgeid_to_target
         data['idnb_j'] = edgeid_to_source
 
-        # Indices of triplets k->j->i
         ntriplets = adj_matrix[edgeid_to_source].sum(1).A1
-        id3ynb_i = np.repeat(edgeid_to_target, ntriplets)
-        id3ynb_j = np.repeat(edgeid_to_source, ntriplets)
-        id3ynb_k = adj_matrix[edgeid_to_source].nonzero()[1]
+        id3ynb_i  = np.repeat(edgeid_to_target, ntriplets)
+        id3ynb_j  = np.repeat(edgeid_to_source, ntriplets)
+        id3ynb_k  = adj_matrix[edgeid_to_source].nonzero()[1]
 
-        # Indices of triplets that are not i->j->i
         id3_y_to_d, = (id3ynb_i != id3ynb_k).nonzero()
         data['id3dnb_i'] = id3ynb_i[id3_y_to_d]
         data['id3dnb_j'] = id3ynb_j[id3_y_to_d]
         data['id3dnb_k'] = id3ynb_k[id3_y_to_d]
 
-        # Edge indices for interactions
-        # j->i => k->j
         data['id_expand_kj'] = atomids_to_edgeid[edgeid_to_source, :].data[id3_y_to_d]
-        # j->i => k->j => j->i
         data['id_reduce_ji'] = atomids_to_edgeid[edgeid_to_source, :].tocoo().row[id3_y_to_d]
         return data
